@@ -11,7 +11,7 @@ services:
     ports:
       - "5432:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U airflow -d airflow"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-airflow} -d ${POSTGRES_DB:-airflow}"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -26,8 +26,11 @@ services:
     image: minio/minio:latest
     command: server /data --console-address ":9001"
     environment:
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+      - MINIO_ROOT_USER=${MINIO_ROOT_USER:-minioadmin}
+      - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD:-minioadmin}
+      - MINIO_NOTIFY_WEBHOOK_AIRFLOW_ENABLE=on
+      - MINIO_NOTIFY_WEBHOOK_AIRFLOW_ENDPOINT=http://webhook:8000/minio-webhook
+      - MINIO_NOTIFY_WEBHOOK_AIRFLOW_AUTH_TOKEN=supersecret
     ports:
       - "9000:9000"
       - "9001:9001"
@@ -40,15 +43,64 @@ services:
     networks:
       - mdp-network
 
-  airflow:
+  webhook:
+    build:
+      context: ./webhook
+      dockerfile: Dockerfile
+    environment:
+      - WEBHOOK_PORT=8000
+      - AIRFLOW_API_URL=http://airflow-webserver:8080/api/v1
+      - AIRFLOW_USER=${AIRFLOW_API_USER:-admin}
+      - AIRFLOW_PASS=${AIRFLOW_API_PASS:-admin}
+      - TARGET_DAG_ID=${TARGET_DAG_ID:-sales_pipeline}
+      - AUTH_TOKEN=supersecret
+    ports:
+      - "8000:8000"
+    depends_on:
+      - airflow-webserver
+    networks:
+      - mdp-network
+
+  mc:
+    image: minio/mc
+    depends_on:
+      - minio
+    entrypoint: >
+      /bin/sh -c "
+      echo 'Waiting for MinIO to be ready...';
+      until curl -s http://minio:9000/minio/health/ready >/dev/null 2>&1; do echo 'Waiting for MinIO...'; sleep 2; done;
+      echo 'Setting up MinIO alias...';
+      mc alias set local http://minio:9000 ${MINIO_ROOT_USER:-minioadmin} ${MINIO_ROOT_PASSWORD:-minioadmin};
+      echo 'Configuring webhook notification...';
+      mc admin config set local notify_webhook:airflow endpoint='http://webhook:8000/minio-webhook' auth_token='supersecret' queue_limit='10';
+      echo 'Restarting MinIO service to apply webhook config...';
+      mc admin service restart local;
+      echo 'Waiting for MinIO to restart...';
+      sleep 10;
+      until curl -s http://minio:9000/minio/health/ready >/dev/null 2>&1; do echo 'Waiting for MinIO restart...'; sleep 2; done;
+      echo 'Creating bucket...';
+      mc mb -p local/sales || true;
+      echo 'Adding event notification...';
+      mc event add local/sales arn:minio:sqs::airflow:webhook --event put --prefix raw/ --suffix .csv || true;
+      echo 'Current events:';
+      mc event list local/sales || true;
+      echo 'MinIO configuration complete. Keeping container running...';
+      tail -f /dev/null
+      "
+    networks:
+      - mdp-network
+
+  airflow-webserver:
     image: apache/airflow:2.6.3
     environment:
       AIRFLOW__CORE__EXECUTOR: LocalExecutor
-      AIRFLOW__CORE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
-      AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW__FERNET_KEY}
+      AIRFLOW__CORE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER:-airflow}:${POSTGRES_PASSWORD:-airflow}@postgres:5432/${POSTGRES_DB:-airflow}
+      AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW__FERNET_KEY:-fernet_key_12345}
+      AIRFLOW__WEBSERVER__SECRET_KEY: ${AIRFLOW__WEBSERVER__SECRET_KEY:-secret_key_12345}
       AIRFLOW__WEBSERVER__ENABLE_PROXY_FIX: "True"
       AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "True"
       AIRFLOW__CORE__LOAD_EXAMPLES: "False"
+      AIRFLOW__API__AUTH_BACKENDS: "airflow.api.auth.backend.basic_auth"
       AWS_ACCESS_KEY_ID: ${MINIO_ACCESS_KEY:-minioadmin}
       AWS_SECRET_ACCESS_KEY: ${MINIO_SECRET_KEY:-minioadmin}
     depends_on:
@@ -62,13 +114,33 @@ services:
     ports:
       - "8080:8080"
     command: >
-      bash -c "airflow db upgrade &&
-               airflow users create --username admin --password admin --firstname Admin --lastname User --role Admin --email pyterayertey@gmail.com || true &&
-               airflow webserver"
+      bash -c "pip install -r /requirements.txt &&
+               airflow db upgrade &&
+               airflow users create --username ${AIRFLOW_API_USER:-admin} --password ${AIRFLOW_API_PASS:-admin} --firstname Admin --lastname User --role Admin --email admin@example.com || true &&
+               exec airflow webserver -p 8080"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
       interval: 10s
       retries: 6
+      start_period: 40s
+    networks:
+      - mdp-network
+
+  airflow-scheduler:
+    image: apache/airflow:2.6.3
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__CORE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER:-airflow}:${POSTGRES_PASSWORD:-airflow}@postgres:5432/${POSTGRES_DB:-airflow}
+      AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW__FERNET_KEY:-fernet_key_12345}
+      AIRFLOW__WEBSERVER__SECRET_KEY: ${AIRFLOW__WEBSERVER__SECRET_KEY:-secret_key_12345}
+    depends_on:
+      - airflow-webserver
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - ./airflow/requirements.txt:/requirements.txt:ro
+    command: >
+      bash -c "pip install -r /requirements.txt &&
+               airflow scheduler"
     networks:
       - mdp-network
 
@@ -84,7 +156,8 @@ services:
     ports:
       - "3000:3000"
     depends_on:
-      - postgres
+      postgres:
+        condition: service_healthy
     networks:
       - mdp-network
 
