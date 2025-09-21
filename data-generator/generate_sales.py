@@ -2,7 +2,7 @@
 import os
 import csv
 import random
-from datetime import date, timedelta
+from datetime import date, timedelta, datetime
 from faker import Faker
 import boto3
 
@@ -26,9 +26,14 @@ def ensure_bucket():
     except Exception:
         pass
 
-def generate_csv(num_rows=100, filename="sales.csv"):
+def generate_csv(num_rows=100, filename_prefix="sales"):
     header = ["sale_date","product_id","product_name","quantity","unit_price"]
     start = date.today() - timedelta(days=30)
+
+    # Add timestamp to filename
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f"{filename_prefix}_{timestamp}.csv"
+
     with open(filename, "w", newline="") as f:
         writer = csv.writer(f)
         writer.writerow(header)
@@ -42,10 +47,10 @@ def generate_csv(num_rows=100, filename="sales.csv"):
     return filename
 
 def upload_file(filepath):
-    s3.Bucket(BUCKET).upload_file(filepath, os.path.basename(filepath))
-    print(f"Uploaded {filepath} to bucket {BUCKET}")
+    s3.Bucket(BUCKET).upload_file(filepath, f"raw/{os.path.basename(filepath)}")
+    print(f"Uploaded {filepath} to bucket {BUCKET}/raw/")
 
 if __name__ == "__main__":
     ensure_bucket()
-    fp = generate_csv(200, "sales_batch.csv")
+    fp = generate_csv(200, "sales_batch")
     upload_file(fp)
