@@ -1,3 +1,4 @@
 .miniplat/
 .env
 airflow/dags/__pycache__/
+infra/postgres/init_metabase.sql
