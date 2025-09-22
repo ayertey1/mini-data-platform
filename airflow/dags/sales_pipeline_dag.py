@@ -196,9 +196,7 @@ def download_file(**context):
                         if key.lower().endswith(".csv") and key != "raw/":
                             files_to_process.append(key)
 
-                logger.info(
-                    f"Found {len(files_to_process)} files for cleanup processing"
-                )
+                logger.info(f"Found {len(files_to_process)} files for cleanup processing")
             except Exception as e:
                 logger.error(f"Failed to list files for cleanup: {str(e)}")
                 raise
@@ -217,9 +215,7 @@ def download_file(**context):
             return {"files_processed": 0, "message": "No files found to process"}
 
         # Store files for downstream processing
-        context["task_instance"].xcom_push(
-            key="files_to_process", value=files_to_process
-        )
+        context["task_instance"].xcom_push(key="files_to_process", value=files_to_process)
 
         return {
             "files_to_process": files_to_process,
@@ -268,9 +264,7 @@ def validate_clean(**context):
         processed_files = []
         rejected_files = []
 
-        logger.info(
-            f"Starting validation and cleaning for {len(files_to_process)} files"
-        )
+        logger.info(f"Starting validation and cleaning for {len(files_to_process)} files")
 
         for file_key in files_to_process:
             try:
@@ -304,9 +298,7 @@ def validate_clean(**context):
                     logger.warning(f"File {file_key} rejected: {error_msg}")
 
                     # Write rejection log
-                    log_content = (
-                        f"File rejected due to schema validation failure: {error_msg}"
-                    )
+                    log_content = f"File rejected due to schema validation failure: {error_msg}"
                     write_log_to_minio(s3, log_content, file_key, "REJECTED", error_msg)
 
                     rejected_files.append(
@@ -326,21 +318,15 @@ def validate_clean(**context):
                 df["quantity"] = (
                     pd.to_numeric(df["quantity"], errors="coerce").fillna(0).astype(int)
                 )
-                df["unit_price"] = pd.to_numeric(
-                    df["unit_price"], errors="coerce"
-                ).fillna(0.0)
-                df["sale_date"] = pd.to_datetime(
-                    df["sale_date"], errors="coerce"
-                ).dt.date
+                df["unit_price"] = pd.to_numeric(df["unit_price"], errors="coerce").fillna(0.0)
+                df["sale_date"] = pd.to_datetime(df["sale_date"], errors="coerce").dt.date
                 df["total_amount"] = df["quantity"] * df["unit_price"]
 
                 # Remove rows with invalid dates
                 df = df.dropna(subset=["sale_date"])
 
                 cleaned_rows = len(df)
-                logger.info(
-                    f"File {file_key} cleaned: {original_rows} -> {cleaned_rows} rows"
-                )
+                logger.info(f"File {file_key} cleaned: {original_rows} -> {cleaned_rows} rows")
 
                 # Store cleaned data
                 processed_files.append(
@@ -368,18 +354,14 @@ def validate_clean(**context):
                     s3.delete_object(Bucket=config["bucket"], Key=file_key)
 
                     # Write error log
-                    log_content = (
-                        f"File processing error: {str(e)}\n{traceback.format_exc()}"
-                    )
+                    log_content = f"File processing error: {str(e)}\n{traceback.format_exc()}"
                     write_log_to_minio(s3, log_content, file_key, "ERROR", str(e))
 
                     rejected_files.append(
                         {"file": file_key, "reason": str(e), "moved_to": rejected_key}
                     )
                 except Exception as move_error:
-                    logger.error(
-                        f"Failed to move error file {file_key}: {str(move_error)}"
-                    )
+                    logger.error(f"Failed to move error file {file_key}: {str(move_error)}")
 
         # Store results for downstream tasks
         context["task_instance"].xcom_push(key="processed_files", value=processed_files)
@@ -432,39 +414,29 @@ def insert_postgres(**context):
 
                 logger.info(f"Inserting {len(df)} rows from {file_key} into PostgreSQL")
 
-                df.to_sql(
-                    "sales", engine, if_exists="append", index=False, method="multi"
-                )
+                df.to_sql("sales", engine, if_exists="append", index=False, method="multi")
 
                 total_rows_inserted += len(df)
                 logger.info(f"Successfully inserted {len(df)} rows from {file_key}")
 
                 # Write success log
-                log_content = f"Successfully inserted {len(df)} rows from {file_key} into PostgreSQL"
+                log_content = (
+                    f"Successfully inserted {len(df)} rows from {file_key} into PostgreSQL"
+                )
                 write_log_to_minio(s3, log_content, file_key, "SUCCESS")
 
             except Exception as e:
-                logger.error(
-                    f"Failed to insert data from {file_info['file_key']}: {str(e)}"
-                )
+                logger.error(f"Failed to insert data from {file_info['file_key']}: {str(e)}")
 
                 # Write error log
-                log_content = (
-                    f"Database insertion failed: {str(e)}\n{traceback.format_exc()}"
-                )
-                write_log_to_minio(
-                    s3, log_content, file_info["file_key"], "DB_ERROR", str(e)
-                )
+                log_content = f"Database insertion failed: {str(e)}\n{traceback.format_exc()}"
+                write_log_to_minio(s3, log_content, file_info["file_key"], "DB_ERROR", str(e))
                 raise
 
         # Store result for downstream tasks
-        context["task_instance"].xcom_push(
-            key="total_rows_inserted", value=total_rows_inserted
-        )
+        context["task_instance"].xcom_push(key="total_rows_inserted", value=total_rows_inserted)
 
-        logger.info(
-            f"Database insertion completed: {total_rows_inserted} total rows inserted"
-        )
+        logger.info(f"Database insertion completed: {total_rows_inserted} total rows inserted")
 
         return {"rows_inserted": total_rows_inserted}
 
@@ -486,9 +458,7 @@ def move_file(**context):
 
         # Handle case where no files were processed
         if not processed_files or len(processed_files) == 0:
-            logger.info(
-                "No files to move - cleanup run completed with no files to process"
-            )
+            logger.info("No files to move - cleanup run completed with no files to process")
             return {
                 "files_moved": 0,
                 "total_rows_processed": 0,
