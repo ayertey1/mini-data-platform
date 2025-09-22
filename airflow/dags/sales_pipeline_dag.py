@@ -3,14 +3,12 @@ import logging
 import os
 import traceback
 from datetime import datetime, timedelta
-from io import BytesIO, StringIO
+from io import BytesIO
 
 import boto3
 import pandas as pd
-from airflow.models import DagRun, Variable
 from airflow.operators.dummy_operator import DummyOperator
 from airflow.operators.python import PythonOperator
-from airflow.utils import timezone
 from airflow.utils.dates import days_ago
 from sqlalchemy import create_engine
 
@@ -404,7 +402,7 @@ def validate_clean(**context):
 def insert_postgres(**context):
     """Stage 5: Insert data into PostgreSQL"""
     try:
-        config = context["task_instance"].xcom_pull(key="config", task_ids="get_config")
+        # config = context["task_instance"].xcom_pull(key="config", task_ids="get_config")
         processed_files = context["task_instance"].xcom_pull(
             key="processed_files", task_ids="validate_clean"
         )
