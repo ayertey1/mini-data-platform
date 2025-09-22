@@ -3,3 +3,7 @@
 airflow/dags/__pycache__/
 infra/postgres/init_metabase.sql
 airflow/dags/sales_pipeline_dag_v2.py
+backups/
+*.log
+__pycache__/
+.pytest_cache/
