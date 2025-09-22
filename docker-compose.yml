@@ -17,7 +17,6 @@ services:
       retries: 5
     volumes:
       - pgdata:/var/lib/postgresql/data
-      - ./infra/postgres/init_db.sql:/docker-entrypoint-initdb.d/init_db.sql:ro
       - ./infra/postgres/init_metabase.sql:/docker-entrypoint-initdb.d/init_metabase.sql:ro
       - ./infra/postgres/init_sales_table.sql:/docker-entrypoint-initdb.d/init_sales_table.sql:ro
     networks:
