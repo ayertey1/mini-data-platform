@@ -2,7 +2,6 @@
 Tests for the webhook service
 """
 
-import json
 import os
 import sys
 

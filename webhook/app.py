@@ -95,7 +95,7 @@ async def minio_webhook(request: Request, token: str = Depends(verify_token)):
                 ):
 
                     logger.info(
-                        f"Matching CSV file detected, triggering Airflow DAG..."
+                        "Matching CSV file detected, triggering Airflow DAG..."
                     )
 
                     # Trigger Airflow DAG
