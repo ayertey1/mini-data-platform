@@ -98,9 +98,7 @@ def test_invalid_webhook_payload():
         pytest.skip("App not available for testing")
 
     headers = {"Authorization": "Bearer supersecret"}
-    response = client.post(
-        "/minio-webhook", json={"invalid": "payload"}, headers=headers
-    )
+    response = client.post("/minio-webhook", json={"invalid": "payload"}, headers=headers)
 
     # Should handle invalid payload gracefully
     assert response.status_code in [200, 400, 500]

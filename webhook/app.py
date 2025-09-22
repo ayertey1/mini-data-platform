@@ -82,9 +82,7 @@ async def minio_webhook(request: Request, token: str = Depends(verify_token)):
                 # URL decode the object key (MinIO sends it URL-encoded)
                 decoded_key = unquote(object_key)
 
-                logger.info(
-                    f"Processing event: {event_name} for {bucket_name}/{object_key}"
-                )
+                logger.info(f"Processing event: {event_name} for {bucket_name}/{object_key}")
                 logger.info(f"Decoded key: {decoded_key}")
 
                 # Check if this is a CSV file upload to the raw/ prefix
@@ -122,9 +120,7 @@ async def minio_webhook(request: Request, token: str = Depends(verify_token)):
 
     except Exception as e:
         logger.error(f"Error processing webhook: {str(e)}")
-        raise HTTPException(
-            status_code=500, detail=f"Webhook processing failed: {str(e)}"
-        )
+        raise HTTPException(status_code=500, detail=f"Webhook processing failed: {str(e)}")
 
 
 async def trigger_airflow_dag(dag_id: str, conf: Dict[str, Any] = None):
@@ -165,9 +161,7 @@ async def trigger_airflow_dag(dag_id: str, conf: Dict[str, Any] = None):
 
     except requests.exceptions.RequestException as e:
         logger.error(f"Network error when calling Airflow API: {str(e)}")
-        raise HTTPException(
-            status_code=503, detail=f"Airflow API unreachable: {str(e)}"
-        )
+        raise HTTPException(status_code=503, detail=f"Airflow API unreachable: {str(e)}")
 
 
 @app.get("/test-airflow")
@@ -182,9 +176,7 @@ async def test_airflow_connection():
 
         return {
             "airflow_status": response.status_code,
-            "airflow_response": (
-                response.json() if response.status_code == 200 else response.text
-            ),
+            "airflow_response": (response.json() if response.status_code == 200 else response.text),
             "airflow_url": url,
         }
     except Exception as e:
