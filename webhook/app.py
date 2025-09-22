@@ -1,11 +1,12 @@
-from fastapi import FastAPI, HTTPException, Depends, Request
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-import requests
-import os
-import logging
-from typing import Dict, Any
 import json
+import logging
+import os
+from typing import Any, Dict
 from urllib.parse import unquote
+
+import requests
+from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)

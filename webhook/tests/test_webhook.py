@@ -2,11 +2,12 @@
 Tests for the webhook service
 """
 
-import pytest
-from fastapi.testclient import TestClient
 import json
 import os
 import sys
+
+import pytest
+from fastapi.testclient import TestClient
 
 # Add the parent directory to the path to import app
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
