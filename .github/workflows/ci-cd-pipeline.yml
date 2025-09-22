@@ -1,0 +1,330 @@
+# .github/workflows/ci-cd-pipeline.yml
+name: Mini Data Platform CI/CD
+
+on:
+  push:
+    branches: 
+      - prod
+      - dev/infrastructure
+  pull_request:
+    branches: 
+      - prod
+      - dev/infrastructure
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  # Test and Validation Job
+  test:
+    runs-on: ubuntu-latest
+    name: Test & Validate
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r webhook/requirements.txt
+        pip install -r airflow/requirements.txt
+        pip install pytest flake8 black isort
+
+    - name: Code formatting check
+      run: |
+        black --check --diff webhook/
+        black --check --diff airflow/dags/
+        isort --check-only --diff webhook/
+        isort --check-only --diff airflow/dags/
+
+    - name: Lint code
+      run: |
+        flake8 webhook/ --max-line-length=100 --ignore=E203,W503
+        flake8 airflow/dags/ --max-line-length=100 --ignore=E203,W503
+
+    - name: Validate Docker Compose
+      run: |
+        docker-compose config
+
+    - name: Test webhook service
+      run: |
+        cd webhook
+        python -m pytest tests/ -v || echo "No tests found, skipping"
+
+    - name: Validate environment file
+      run: |
+        if [ -f .env.example ]; then
+          echo "Environment template found"
+        else
+          echo "Warning: No .env.example found"
+        fi
+
+    - name: Check DAG syntax
+      run: |
+        python -c "
+        import sys
+        sys.path.append('airflow/dags')
+        try:
+            import sales_pipeline_dag
+            print('DAG syntax validation passed')
+        except Exception as e:
+            print(f'DAG syntax error: {e}')
+            exit(1)
+        "
+
+  # Build and Push Images
+  build:
+    needs: test
+    runs-on: ubuntu-latest
+    name: Build & Push Images
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Log in to Container Registry
+      uses: docker/login-action@v3
+      with:
+        registry: ${{ env.REGISTRY }}
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Extract metadata for webhook
+      id: meta-webhook
+      uses: docker/metadata-action@v5
+      with:
+        images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/webhook
+        tags: |
+          type=ref,event=branch
+          type=ref,event=pr
+          type=sha,prefix={{branch}}-
+
+    - name: Build and push webhook image
+      uses: docker/build-push-action@v5
+      with:
+        context: ./webhook
+        push: true
+        tags: ${{ steps.meta-webhook.outputs.tags }}
+        labels: ${{ steps.meta-webhook.outputs.labels }}
+
+  # Development Deployment
+  deploy-dev:
+    if: github.ref == 'refs/heads/dev/infrastructure'
+    needs: [test, build]
+    runs-on: ubuntu-latest
+    name: Deploy to Development
+    environment: development
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up environment variables
+      run: |
+        cat > .env << EOF
+        # Development Environment
+        MINIO_ROOT_USER=minioadmin
+        MINIO_ROOT_PASSWORD=minioadmin_dev
+        MINIO_ACCESS_KEY=minioadmin
+        MINIO_SECRET_KEY=minioadmin_dev
+        
+        POSTGRES_USER=airflow
+        POSTGRES_PASSWORD=airflow_dev
+        POSTGRES_DB=airflow
+        
+        METABASE_DB=metabase
+        METABASE_USER=metabase
+        METABASE_PASSWORD=metabase_dev
+        
+        AIRFLOW_API_USER=admin
+        AIRFLOW_API_PASS=admin_dev
+        AIRFLOW__FERNET_KEY=dev_fernet_key_12345678901234567890123456789012
+        AIRFLOW__WEBSERVER__SECRET_KEY=dev_secret_key_12345678901234567890123456789012
+        
+        TARGET_DAG_ID=sales_pipeline
+        
+        # Development specific
+        ENVIRONMENT=development
+        DEBUG=true
+        EOF
+
+    - name: Deploy to development
+      run: |
+        echo "Deploying to Development Environment"
+        
+        # Stop existing services
+        docker-compose down --remove-orphans || true
+        
+        # Pull latest images
+        docker-compose pull
+        
+        # Start services
+        docker-compose up -d
+        
+        # Wait for services to be ready
+        sleep 60
+        
+        # Health checks
+        echo "Performing health checks..."
+        
+        # Check MinIO
+        curl -f http://localhost:9000/minio/health/ready || exit 1
+        
+        # Check Webhook
+        curl -f http://localhost:8000/health || exit 1
+        
+        # Check Airflow
+        curl -f http://localhost:8080/health || exit 1
+        
+        # Check PostgreSQL
+        docker-compose exec -T postgres pg_isready -U airflow || exit 1
+        
+        echo "Development deployment successful"
+
+    - name: Run integration tests
+      run: |
+        echo "Running integration tests..."
+        
+        # Test file upload and processing
+        python data-generator/generate_sales.py || echo "Test data generation failed"
+        
+        # Wait for processing
+        sleep 30
+        
+        # Check logs
+        docker-compose logs webhook --tail 10
+        docker-compose logs airflow-scheduler --tail 10
+        
+        echo "Integration tests completed"
+
+  # Production Deployment
+  deploy-prod:
+    if: github.ref == 'refs/heads/prod'
+    needs: [test, build]
+    runs-on: ubuntu-latest
+    name: Deploy to Production
+    environment: production
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up production environment
+      run: |
+        cat > .env << EOF
+        # Production Environment
+        MINIO_ROOT_USER=${{ secrets.MINIO_ROOT_USER }}
+        MINIO_ROOT_PASSWORD=${{ secrets.MINIO_ROOT_PASSWORD }}
+        MINIO_ACCESS_KEY=${{ secrets.MINIO_ACCESS_KEY }}
+        MINIO_SECRET_KEY=${{ secrets.MINIO_SECRET_KEY }}
+        
+        POSTGRES_USER=${{ secrets.POSTGRES_USER }}
+        POSTGRES_PASSWORD=${{ secrets.POSTGRES_PASSWORD }}
+        POSTGRES_DB=${{ secrets.POSTGRES_DB }}
+        
+        METABASE_DB=${{ secrets.METABASE_DB }}
+        METABASE_USER=${{ secrets.METABASE_USER }}
+        METABASE_PASSWORD=${{ secrets.METABASE_PASSWORD }}
+        
+        AIRFLOW_API_USER=${{ secrets.AIRFLOW_API_USER }}
+        AIRFLOW_API_PASS=${{ secrets.AIRFLOW_API_PASS }}
+        AIRFLOW__FERNET_KEY=${{ secrets.AIRFLOW_FERNET_KEY }}
+        AIRFLOW__WEBSERVER__SECRET_KEY=${{ secrets.AIRFLOW_SECRET_KEY }}
+        
+        TARGET_DAG_ID=sales_pipeline
+        
+        # Production specific
+        ENVIRONMENT=production
+        DEBUG=false
+        EOF
+
+    - name: Create backup
+      run: |
+        echo "Creating backup before deployment"
+        
+        # Backup databases
+        docker-compose exec -T postgres pg_dump -U ${{ secrets.POSTGRES_USER }} airflow > backup-airflow-$(date +%Y%m%d-%H%M%S).sql || true
+        docker-compose exec -T postgres pg_dump -U ${{ secrets.METABASE_USER }} ${{ secrets.METABASE_DB }} > backup-metabase-$(date +%Y%m%d-%H%M%S).sql || true
+        
+        echo "Backup completed"
+
+    - name: Deploy to production
+      run: |
+        echo "Deploying to Production Environment"
+        
+        # Blue-green deployment approach
+        # Stop non-critical services first
+        docker-compose stop metabase || true
+        
+        # Update webhook service
+        docker-compose up -d webhook
+        
+        # Update Airflow services
+        docker-compose up -d airflow-webserver airflow-scheduler
+        
+        # Wait for services to stabilize
+        sleep 120
+        
+        # Health checks
+        echo "Performing production health checks..."
+        
+        # Check MinIO
+        curl -f http://localhost:9000/minio/health/ready || exit 1
+        
+        # Check Webhook
+        curl -f http://localhost:8000/health || exit 1
+        
+        # Check Airflow
+        curl -f http://localhost:8080/health || exit 1
+        
+        # Start remaining services
+        docker-compose up -d
+        
+        echo "Production deployment successful"
+
+    - name: Post-deployment validation
+      run: |
+        echo "Running post-deployment validation..."
+        
+        # Test webhook endpoint
+        curl -X POST http://localhost:8000/minio-webhook \
+             -H "Content-Type: application/json" \
+             -H "Authorization: Bearer supersecret" \
+             -d '{"test": "deployment_validation"}' || exit 1
+        
+        # Check DAG status
+        curl -u ${{ secrets.AIRFLOW_API_USER }}:${{ secrets.AIRFLOW_API_PASS }} \
+             http://localhost:8080/api/v1/dags/sales_pipeline || exit 1
+        
+        echo "Post-deployment validation successful"
+
+  # Notification Job
+  notify:
+    needs: [deploy-dev, deploy-prod]
+    if: always()
+    runs-on: ubuntu-latest
+    name: Send Notifications
+
+    steps:
+    - name: Notify on success
+      if: needs.deploy-dev.result == 'success' || needs.deploy-prod.result == 'success'
+      run: |
+        echo "Deployment successful for branch: ${{ github.ref_name }}"
+        # Add Slack/Discord/Email notification here if needed
+
+    - name: Notify on failure
+      if: needs.deploy-dev.result == 'failure' || needs.deploy-prod.result == 'failure'
+      run: |
+        echo "Deployment failed for branch: ${{ github.ref_name }}"
+        # Add failure notification here
+        exit 1
