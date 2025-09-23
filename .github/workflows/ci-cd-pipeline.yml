@@ -140,7 +140,7 @@ jobs:
         DEBUG=true
         EOF
 
-    - name: Deploy to development
+        - name: Deploy to development
       run: |
         echo "Deploying to Development Environment"
         
@@ -153,8 +153,8 @@ jobs:
         # Start services
         docker compose up -d
         
-        # Wait for services to be ready
-        sleep 60
+        # Wait a short time before checks
+        sleep 20
         
         # Health checks
         echo "Performing health checks..."
@@ -167,8 +167,8 @@ jobs:
         
         # Check Airflow
         curl -f http://localhost:8080/health || exit 1
-      
-      - name: Wait for PostgreSQL
+
+    - name: Wait for PostgreSQL   # <-- fixed indentation
       run: |
         echo "Waiting for PostgreSQL to be ready..."
         for i in {1..30}; do
@@ -181,9 +181,7 @@ jobs:
         done
         echo "PostgreSQL failed to start in time"
         exit 1
-        
-        # Check PostgreSQL
-        # docker compose exec -T postgres pg_isready -U airflow || exit 1
+
         
         echo "Development deployment successful"
 
