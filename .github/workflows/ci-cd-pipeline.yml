@@ -38,7 +38,7 @@ jobs:
 
     - name: Validate Docker Compose
       run: |
-        docker-compose config
+        docker compose config
 
     - name: Test webhook service (basic import)
       run: |
@@ -150,13 +150,13 @@ jobs:
         echo "Deploying to Development Environment"
         
         # Stop existing services
-        docker-compose down --remove-orphans || true
+        docker compose down --remove-orphans || true
         
         # Pull latest images
-        docker-compose pull
+        docker compose pull
         
         # Start services
-        docker-compose up -d
+        docker compose up -d
         
         # Wait for services to be ready
         sleep 60
@@ -174,7 +174,7 @@ jobs:
         curl -f http://localhost:8080/health || exit 1
         
         # Check PostgreSQL
-        docker-compose exec -T postgres pg_isready -U airflow || exit 1
+        docker compose exec -T postgres pg_isready -U airflow || exit 1
         
         echo "Development deployment successful"
 
@@ -189,8 +189,8 @@ jobs:
         sleep 30
         
         # Check logs
-        docker-compose logs webhook --tail 10
-        docker-compose logs airflow-scheduler --tail 10
+        docker compose logs webhook --tail 10
+        docker compose logs airflow-scheduler --tail 10
         
         echo "Integration tests completed"
 
@@ -240,8 +240,8 @@ jobs:
         echo "Creating backup before deployment"
         
         # Backup databases
-        docker-compose exec -T postgres pg_dump -U ${{ secrets.POSTGRES_USER }} airflow > backup-airflow-$(date +%Y%m%d-%H%M%S).sql || true
-        docker-compose exec -T postgres pg_dump -U ${{ secrets.METABASE_USER }} ${{ secrets.METABASE_DB }} > backup-metabase-$(date +%Y%m%d-%H%M%S).sql || true
+        docker compose exec -T postgres pg_dump -U ${{ secrets.POSTGRES_USER }} airflow > backup-airflow-$(date +%Y%m%d-%H%M%S).sql || true
+        docker compose exec -T postgres pg_dump -U ${{ secrets.METABASE_USER }} ${{ secrets.METABASE_DB }} > backup-metabase-$(date +%Y%m%d-%H%M%S).sql || true
         
         echo "Backup completed"
 
@@ -251,13 +251,13 @@ jobs:
         
         # Blue-green deployment approach
         # Stop non-critical services first
-        docker-compose stop metabase || true
+        docker compose stop metabase || true
         
         # Update webhook service
-        docker-compose up -d webhook
+        docker compose up -d webhook
         
         # Update Airflow services
-        docker-compose up -d airflow-webserver airflow-scheduler
+        docker compose up -d airflow-webserver airflow-scheduler
         
         # Wait for services to stabilize
         sleep 120
@@ -275,7 +275,7 @@ jobs:
         curl -f http://localhost:8080/health || exit 1
         
         # Start remaining services
-        docker-compose up -d
+        docker compose up -d
         
         echo "Production deployment successful"
 
