@@ -140,7 +140,7 @@ jobs:
         DEBUG=true
         EOF
 
-        - name: Deploy to development
+    - name: Deploy to development
       run: |
         echo "Deploying to Development Environment"
         
