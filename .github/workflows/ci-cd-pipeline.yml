@@ -116,17 +116,17 @@ jobs:
         cat > .env << EOF
         # Development Environment
         MINIO_ROOT_USER=minioadmin
-        MINIO_ROOT_PASSWORD=minioadmin_dev
+        MINIO_ROOT_PASSWORD=minioadmin
         MINIO_ACCESS_KEY=minioadmin
-        MINIO_SECRET_KEY=minioadmin_dev
+        MINIO_SECRET_KEY=minioadmin
         
         POSTGRES_USER=airflow
-        POSTGRES_PASSWORD=airflow_dev
+        POSTGRES_PASSWORD=airflow
         POSTGRES_DB=airflow
         
         METABASE_DB=metabase
         METABASE_USER=metabase
-        METABASE_PASSWORD=metabase_dev
+        METABASE_PASSWORD=metabase
         
         AIRFLOW_API_USER=admin
         AIRFLOW_API_PASS=admin_dev
