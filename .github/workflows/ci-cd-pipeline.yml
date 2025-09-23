@@ -167,6 +167,20 @@ jobs:
         
         # Check Airflow
         curl -f http://localhost:8080/health || exit 1
+      
+      - name: Wait for PostgreSQL
+      run: |
+        echo "Waiting for PostgreSQL to be ready..."
+        for i in {1..30}; do
+          if docker compose exec -T postgres pg_isready -U airflow; then
+            echo "PostgreSQL is ready!"
+            exit 0
+          fi
+          echo "PostgreSQL not ready yet... retrying in 5s"
+          sleep 5
+        done
+        echo "PostgreSQL failed to start in time"
+        exit 1
         
         # Check PostgreSQL
         # docker compose exec -T postgres pg_isready -U airflow || exit 1
