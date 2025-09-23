@@ -55,16 +55,11 @@ jobs:
 
     - name: Check DAG syntax
       run: |
-        python -c "
-        import sys
-        sys.path.append('airflow/dags')
-        try:
-            import sales_pipeline_dag
-            print('DAG syntax validation passed')
-        except Exception as e:
-            print(f'DAG syntax error: {e}')
-            exit(1)
-        "
+        for dag in airflow/dags/*.py; do
+          echo "Checking $dag..."
+          python -m py_compile "$dag" || exit 1
+        done
+        echo "All DAGs compile successfully"
 
   # Build and Push Images
   build:
