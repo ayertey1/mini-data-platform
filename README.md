@@ -11,7 +11,7 @@ This document details a comprehensive data platform that automatically processes
 - **Metabase**: Self-service business intelligence platform for data visualization and analytics
 - **Docker Compose**: Container orchestration for seamless deployment and scalability
 
-![Architecture Diagram](architecure\image.png)
+![Architecture Diagram](architecure/image.png)
 
 ## Business Intelligence & Analytics
 
@@ -19,7 +19,7 @@ This document details a comprehensive data platform that automatically processes
 
 The platform includes a comprehensive SalesOps Dashboard built with Metabase that provides real-time insights into sales performance and data pipeline health.
 
-![SalesOps Dashboard](dashboard\salesOpsDashboardNM.png)
+![SalesOps Dashboard](dashboard/salesOpsDashboardNM.png)
 
 ### Key Performance Indicators (KPIs)
 
