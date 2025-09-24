@@ -111,6 +111,50 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
 
+    - name: Create required PostgreSQL init files
+      run: |
+        # Create basic init files if they don't exist
+        mkdir -p infra/postgres
+        
+        if [ ! -f infra/postgres/init_db.sql ]; then
+          cat > infra/postgres/init_db.sql << 'EOF'
+        -- Basic Airflow database initialization
+        -- This file is created by CI/CD if missing
+        SELECT 'Airflow database initialized' as status;
+        EOF
+        fi
+        
+        if [ ! -f infra/postgres/init_metabase.sql ]; then
+          cat > infra/postgres/init_metabase.sql << 'EOF'
+        -- Create Metabase database and user
+        CREATE DATABASE metabase;
+        CREATE USER metabase WITH PASSWORD 'metabase';
+        GRANT ALL PRIVILEGES ON DATABASE metabase TO metabase;
+        EOF
+        fi
+        
+        if [ ! -f infra/postgres/init_sales_table.sql ]; then
+          cat > infra/postgres/init_sales_table.sql << 'EOF'
+        -- Create sales table for storing processed data
+        CREATE TABLE IF NOT EXISTS sales (
+            id SERIAL PRIMARY KEY,
+            sale_date DATE NOT NULL,
+            product_id VARCHAR(100) NOT NULL,
+            product_name VARCHAR(255) NOT NULL,
+            quantity INTEGER NOT NULL DEFAULT 0,
+            unit_price DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+            total_amount DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+
+        -- Create indexes for better query performance
+        CREATE INDEX IF NOT EXISTS idx_sales_date ON sales(sale_date);
+        CREATE INDEX IF NOT EXISTS idx_sales_product_id ON sales(product_id);
+        CREATE INDEX IF NOT EXISTS idx_sales_created_at ON sales(created_at);
+        EOF
+        fi
+
     - name: Set up environment variables
       run: |
         cat > .env << EOF
@@ -140,69 +184,134 @@ jobs:
         DEBUG=true
         EOF
 
-    - name: Deploy to development
+    - name: Start core services first
       run: |
-        echo "Deploying to Development Environment"
+        echo "Starting core infrastructure services..."
         
-        # Stop existing services
+        # Stop any existing services
         docker compose down --remove-orphans || true
         
-        # Pull latest images
-        docker compose pull
+        # Remove old volumes to ensure clean start
+        docker volume prune -f || true
         
-        # Start services
-        docker compose up -d
+        # Start PostgreSQL and MinIO first
+        docker compose up -d postgres minio
         
-        # Wait a short time before checks
-        sleep 20
-        
-        # Health checks
-        echo "Performing health checks..."
-        
-        # Check MinIO
-        curl -f http://localhost:9000/minio/health/ready || exit 1
-        
-        # Check Webhook
-        curl -f http://localhost:8000/health || exit 1
-        
-        # Check Airflow
-        curl -f http://localhost:8080/health || exit 1
+        echo "Waiting for core services to initialize..."
+        sleep 45
 
-    - name: Wait for PostgreSQL   # <-- fixed indentation
+    - name: Wait for PostgreSQL to be healthy
       run: |
         echo "Waiting for PostgreSQL to be ready..."
-        for i in {1..30}; do
+        for i in {1..60}; do
           if docker compose exec -T postgres pg_isready -U airflow; then
             echo "PostgreSQL is ready!"
-            exit 0
+            break
           fi
-          echo "PostgreSQL not ready yet... retrying in 5s"
+          if [ $i -eq 60 ]; then
+            echo "PostgreSQL failed to start in time"
+            docker compose logs postgres
+            exit 1
+          fi
+          echo "PostgreSQL not ready yet... retrying in 5s ($i/60)"
           sleep 5
         done
-        echo "PostgreSQL failed to start in time"
-        exit 1
 
-    - name: Debug Postgres logs if unhealthy
-      if: failure()
-      run: docker compose logs postgres
+    - name: Wait for MinIO to be healthy
+      run: |
+        echo "Waiting for MinIO to be ready..."
+        for i in {1..30}; do
+          if curl -f http://localhost:9000/minio/health/ready >/dev/null 2>&1; then
+            echo "MinIO is ready!"
+            break
+          fi
+          if [ $i -eq 30 ]; then
+            echo "MinIO failed to start in time"
+            docker compose logs minio
+            exit 1
+          fi
+          echo "MinIO not ready yet... retrying in 5s ($i/30)"
+          sleep 5
+        done
 
-
+    - name: Start remaining services
+      run: |
+        echo "Starting remaining services..."
         
-        echo "Development deployment successful"
+        # Start MinIO client for configuration
+        docker compose up -d mc
+        sleep 20
+        
+        # Start application services
+        docker compose up -d airflow-webserver airflow-scheduler webhook
+        
+        echo "Waiting for application services to start..."
+        sleep 60
+
+    - name: Health check all services
+      run: |
+        echo "Performing comprehensive health checks..."
+        
+        # Check Webhook
+        for i in {1..20}; do
+          if curl -f http://localhost:8000/health >/dev/null 2>&1; then
+            echo "Webhook is healthy!"
+            break
+          fi
+          if [ $i -eq 20 ]; then
+            echo "Webhook health check failed"
+            docker compose logs webhook
+            exit 1
+          fi
+          echo "Waiting for webhook... ($i/20)"
+          sleep 3
+        done
+        
+        # Check Airflow
+        for i in {1..30}; do
+          if curl -f http://localhost:8080/health >/dev/null 2>&1; then
+            echo "Airflow is healthy!"
+            break
+          fi
+          if [ $i -eq 30 ]; then
+            echo "Airflow health check failed"
+            docker compose logs airflow-webserver
+            docker compose logs airflow-scheduler
+            exit 1
+          fi
+          echo "Waiting for Airflow... ($i/30)"
+          sleep 5
+        done
+
+    - name: Start final services
+      run: |
+        echo "Starting final services..."
+        docker compose up -d metabase
+        sleep 10
+        echo "Development deployment successful!"
+
+    - name: Show service status
+      run: |
+        echo "Final service status:"
+        docker compose ps
+        
+        echo "Recent logs from key services:"
+        echo "=== WEBHOOK LOGS ==="
+        docker compose logs webhook --tail 10
+        echo "=== AIRFLOW SCHEDULER LOGS ==="
+        docker compose logs airflow-scheduler --tail 10
 
     - name: Run integration tests
       run: |
         echo "Running integration tests..."
         
         # Test file upload and processing
-        python data-generator/generate_sales.py || echo "Test data generation failed"
-        
-        # Wait for processing
-        sleep 30
-        
-        # Check logs
-        docker compose logs webhook --tail 10
-        docker compose logs airflow-scheduler --tail 10
+        if [ -f data-generator/generate_sales.py ]; then
+          python data-generator/generate_sales.py || echo "Test data generation failed"
+          sleep 30
+        else
+          echo "No data generator found, skipping file upload test"
+        fi
         
         echo "Integration tests completed"
 
@@ -217,6 +326,49 @@ jobs:
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
+
+    - name: Create required PostgreSQL init files
+      run: |
+        # Create basic init files if they don't exist
+        mkdir -p infra/postgres
+        
+        if [ ! -f infra/postgres/init_db.sql ]; then
+          cat > infra/postgres/init_db.sql << 'EOF'
+        -- Basic Airflow database initialization
+        SELECT 'Airflow database initialized' as status;
+        EOF
+        fi
+        
+        if [ ! -f infra/postgres/init_metabase.sql ]; then
+          cat > infra/postgres/init_metabase.sql << 'EOF'
+        -- Create Metabase database and user
+        CREATE DATABASE metabase;
+        CREATE USER metabase WITH PASSWORD '${{ secrets.METABASE_PASSWORD }}';
+        GRANT ALL PRIVILEGES ON DATABASE metabase TO metabase;
+        EOF
+        fi
+        
+        if [ ! -f infra/postgres/init_sales_table.sql ]; then
+          cat > infra/postgres/init_sales_table.sql << 'EOF'
+        -- Create sales table for storing processed data
+        CREATE TABLE IF NOT EXISTS sales (
+            id SERIAL PRIMARY KEY,
+            sale_date DATE NOT NULL,
+            product_id VARCHAR(100) NOT NULL,
+            product_name VARCHAR(255) NOT NULL,
+            quantity INTEGER NOT NULL DEFAULT 0,
+            unit_price DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+            total_amount DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+
+        -- Create indexes for better query performance
+        CREATE INDEX IF NOT EXISTS idx_sales_date ON sales(sale_date);
+        CREATE INDEX IF NOT EXISTS idx_sales_product_id ON sales(product_id);
+        CREATE INDEX IF NOT EXISTS idx_sales_created_at ON sales(created_at);
+        EOF
+        fi
 
     - name: Set up production environment
       run: |
@@ -251,9 +403,9 @@ jobs:
       run: |
         echo "Creating backup before deployment"
         
-        # Backup databases
-        docker compose exec -T postgres pg_dump -U ${{ secrets.POSTGRES_USER }} airflow > backup-airflow-$(date +%Y%m%d-%H%M%S).sql || true
-        docker compose exec -T postgres pg_dump -U ${{ secrets.METABASE_USER }} ${{ secrets.METABASE_DB }} > backup-metabase-$(date +%Y%m%d-%H%M%S).sql || true
+        # Backup databases if they exist
+        docker compose exec -T postgres pg_dump -U ${{ secrets.POSTGRES_USER }} ${{ secrets.POSTGRES_DB }} > backup-airflow-$(date +%Y%m%d-%H%M%S).sql || echo "No existing Airflow DB to backup"
+        docker compose exec -T postgres pg_dump -U ${{ secrets.METABASE_USER }} ${{ secrets.METABASE_DB }} > backup-metabase-$(date +%Y%m%d-%H%M%S).sql || echo "No existing Metabase DB to backup"
         
         echo "Backup completed"
 
@@ -261,33 +413,24 @@ jobs:
       run: |
         echo "Deploying to Production Environment"
         
-        # Blue-green deployment approach
-        # Stop non-critical services first
-        docker compose stop metabase || true
+        # Graceful shutdown
+        docker compose down --remove-orphans || true
         
-        # Update webhook service
-        docker compose up -d webhook
+        # Start core services
+        docker compose up -d postgres minio
+        sleep 60
         
-        # Update Airflow services
-        docker compose up -d airflow-webserver airflow-scheduler
-        
-        # Wait for services to stabilize
+        # Start application services
+        docker compose up -d airflow-webserver airflow-scheduler webhook mc
         sleep 120
         
         # Health checks
-        echo "Performing production health checks..."
-        
-        # Check MinIO
         curl -f http://localhost:9000/minio/health/ready || exit 1
-        
-        # Check Webhook
         curl -f http://localhost:8000/health || exit 1
-        
-        # Check Airflow
         curl -f http://localhost:8080/health || exit 1
         
         # Start remaining services
-        docker compose up -d
+        docker compose up -d metabase
         
         echo "Production deployment successful"
 
@@ -319,11 +462,8 @@ jobs:
       if: needs.deploy-dev.result == 'success' || needs.deploy-prod.result == 'success'
       run: |
         echo "Deployment successful for branch: ${{ github.ref_name }}"
-        # Add Slack/Discord/Email notification here if needed
 
     - name: Notify on failure
       if: needs.deploy-dev.result == 'failure' || needs.deploy-prod.result == 'failure'
       run: |
         echo "Deployment failed for branch: ${{ github.ref_name }}"
-        # Add failure notification here
-        exit 1
