@@ -1,0 +1,82 @@
+# Production override for docker-compose.yml
+version: "3.8"
+
+services:
+  # Production webhook using built image from registry
+  webhook:
+    image: ghcr.io/${GITHUB_REPOSITORY}/webhook:prod
+    environment:
+      - WEBHOOK_PORT=8000
+      - AIRFLOW_API_URL=http://airflow-webserver:8080/api/v1
+      - AIRFLOW_USER=${AIRFLOW_API_USER}
+      - AIRFLOW_PASS=${AIRFLOW_API_PASS}
+      - TARGET_DAG_ID=${TARGET_DAG_ID}
+      - AUTH_TOKEN=supersecret
+      - ENVIRONMENT=${ENVIRONMENT:-production}
+    restart: always
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # Production MinIO with persistent data
+  minio:
+    restart: always
+    healthcheck:
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Production PostgreSQL with backup configurations
+  postgres:
+    restart: always
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    command: >
+      postgres 
+      -c max_connections=200
+      -c shared_buffers=256MB
+      -c effective_cache_size=1GB
+      -c maintenance_work_mem=64MB
+      -c checkpoint_completion_target=0.7
+      -c wal_buffers=16MB
+      -c default_statistics_target=100
+      -c random_page_cost=1.1
+      -c effective_io_concurrency=200
+
+  # Production Airflow services with resource limits
+  airflow-webserver:
+    restart: always
+    environment:
+      AIRFLOW__WEBSERVER__SECRET_KEY: ${AIRFLOW__WEBSERVER__SECRET_KEY}
+      AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW__FERNET_KEY}
+    healthcheck:
+      interval: 30s
+      timeout: 15s
+      retries: 5
+      start_period: 80s
+
+  airflow-scheduler:
+    restart: always
+    environment:
+      AIRFLOW__WEBSERVER__SECRET_KEY: ${AIRFLOW__WEBSERVER__SECRET_KEY}
+      AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW__FERNET_KEY}
+
+  # Production Metabase with persistent data
+  metabase:
+    restart: always
+    environment:
+      MB_DB_USER: ${METABASE_USER}
+      MB_DB_PASS: ${METABASE_PASSWORD}
+      MB_DB_DBNAME: ${METABASE_DB}
+
+# Production volumes with backup annotations
+volumes:
+  pgdata:
+    driver: local
+  minio_data:
+    driver: local
