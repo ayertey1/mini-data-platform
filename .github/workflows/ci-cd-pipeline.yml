@@ -183,7 +183,7 @@ jobs:
         exit 1
 
     - name: Debug Postgres logs if unhealthy
-        if: failure()
+      if: failure()
       run: docker compose logs postgres
 
 
